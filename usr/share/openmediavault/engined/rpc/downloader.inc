@@ -4,6 +4,7 @@
  * @author    Volker Theile <volker.theile@openmediavault.org>
  * @copyright Copyright (c) 2009-2013 Volker Theile
  * @copyright Copyright (c) 2013-2020 OpenMediaVault Plugin Developers
+ * @copyright Copyright (c) 2022 Godofallthatwas 
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -78,40 +79,38 @@ class OMVRpcServiceDownloader extends \OMV\Rpc\ServiceAbstract
                 continue;
             }
             $filename = sprintf("%s/%s", $sfPath, $objectv->get("filename"));
-            $filenamepart = sprintf("%s/%s.part", $sfPath, $objectv->get("filename"));
+            $finalExt = $objectv->get('format');
+            $finalfilename = sprintf("%s/%s.%s", $sfPath, $objectv->get("filename"), $finalExt);
+            $tmpExt = strtoupper($finalExt);
+            $finalNOFFMPEGfilename = sprintf("%s/%s.%s", $sfPath, $objectv->get("filename"), $tmpExt);
+            $filenamepart = sprintf("%s/%s.%s.part", $sfPath, $objectv->get("filename"), $tmpExt);
             $filenamearia = sprintf("%s/%s.aria2", $sfPath, $objectv->get("filename"));
+
             $pid = sprintf("%sdownloader-%s.pid", $this->getPidDir, $objectv->get('uuid'));
             $dlType = $objectv->get('dltype');
 
             if (file_exists($pid)) {
                 $objectv->set('downloading', true);
 
-                switch ($dlType) {
-                    case "curl":
-                        $objectv->set('filesize', intval(filesize($filename)));
-                        break;
-
-                    case "youtube-dl":
-                        $objectv->set('filesize', intval(filesize($filenamepart)));
-                        break;
-
-                    case "playlist":
-                    case "multiple":
-                        $objectv->set('filesize', 0);
-                        break;
-
-                    default:
-                        $objectv->set('filesize', intval(filesize($filenamearia)));
-                }
+            } 
+            if ($dlType == "playlist" || $dlType == "multiple") {
+                $objectv->set('filesize', 0);
             } else {
-                if ($dlType == "playlist" || $dlType == "multiple") {
-                    $objectv->set('filesize', 0);
-                } else {
-                    if (file_exists($filename)) {
-                        $objectv->set('filesize', intval(filesize($filename)));
-                    }
+                if (file_exists($filename)) {
+                    $objectv->set('filesize', intval(filesize($filename)));
+                } elseif (file_exists($finalfilename)) {
+                    $objectv->set('filesize', intval(filesize($finalfilename)));
+                } elseif (file_exists($finalNOFFMPEGfilename)) {
+                    $objectv->set('filesize', intval(filesize($finalNOFFMPEGfilename)));
+                } elseif (file_exists($filenamearia)) {
+                    $objectv->set('filesize', intval(filesize($filenamearia)));
+                } elseif (file_exists($filenamepart)) {
+                    $objectv->set('filesize', intval(filesize($filenamepart)));
                 }
+                        
+                
             }
+         
             $objectv->set('url', str_replace(PHP_EOL, '<br/>', $objectv->get('url')));
             $objectsAssoc[] = $objectv->getAssoc();
         }
@@ -192,6 +191,9 @@ class OMVRpcServiceDownloader extends \OMV\Rpc\ServiceAbstract
         $filename = $object->get('filename');
         $url = $object->get('url');
         $delete = boolval($object->get('delete'));
+        $finalExt = $object->get('format');
+        $tmpExt = strtoupper($finalExt);
+
 
         switch ($object->get('format')) {
             case "aac":
@@ -236,8 +238,14 @@ class OMVRpcServiceDownloader extends \OMV\Rpc\ServiceAbstract
                 if ($object->get('subtitles')) {
                     $cmdArgs[] = "--all-subs --write-sub";
                 }
-                $cmdArgs[] = sprintf("--format '%s'", $format);
-                $cmdArgs[] = sprintf("-o \"%s/%s\"", $sfPath, $filename);
+                if ($audio){
+                    $cmdArgs[] = sprintf("-x --audio-format '%s' --format '%s'", $finalExt, $format);
+                    $cmdArgs[] = sprintf("-o \"%s/%s.%s\"", $sfPath, $filename, $tmpExt);
+                }
+                else{
+                    $cmdArgs[] = sprintf("--format '%s'", $format);
+                    $cmdArgs[] = sprintf("-o \"%s/%s\"", $sfPath, $filename);
+                }
                 $cmdArgs[] = sprintf("\"%s\"", $url);
                 break;
 
@@ -281,15 +289,16 @@ class OMVRpcServiceDownloader extends \OMV\Rpc\ServiceAbstract
         touch($pid);
 
         // [2013-10-30 13:30:15] DOWNLOAD: youtube-dl: test.mp4: movies: START: http://domain.com/test.mp4
-        $log = sprintf("[%s] DOWNLOAD: %s: %s: %s: START: %s\r\n", date("Y-m-d H:i:s"), $dltype, $filename, $sfname, $url);
+        $log = sprintf("[%s] DOWNLOAD: %s: %s: %s: START: %s\r\n", date("Y-m-d H:i:s"), $dltype, $filename, $sfPath, $url);
         file_put_contents($this->getLogFile, $log, FILE_APPEND);
 
         // Start download
         $cmd = new \OMV\System\Process($cmdBin, $cmdArgs);
         var_dump($cmd->getCommandLine());
+        $cmd->setQuiet(TRUE);
         $cmd->execute();
 
-        $log = sprintf("[%s] DOWNLOAD: %s: %s: %s: FINISH: %s\r\n", date("Y-m-d H:i:s"), $dltype, $filename, $sfname, $url);
+        $log = sprintf("[%s] DOWNLOAD: %s: %s: %s: FINISH: %s\r\n", date("Y-m-d H:i:s"), $dltype, $filename, $sfPath, $url);
         file_put_contents($this->getLogFile, $log, FILE_APPEND);
 
         // Destroy pid file
